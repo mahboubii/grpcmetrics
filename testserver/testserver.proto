@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package testserver;
+
+option go_package = "github.com/mahboubii/grpcmetrics/testserver";
+
+message Empty {}
+
+message NonEmpty {
+  int32 value = 1;
+}
+
+service TestsService {
+  rpc Ok(Empty) returns (NonEmpty);
+  rpc Error(Empty) returns (Empty);
+  rpc Stream(Empty) returns (stream NonEmpty);
+}
