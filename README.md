@@ -4,7 +4,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/mahboubii/grpcmetrics)](https://goreportcard.com/report/github.com/mahboubii/grpcmetrics)
 [![Documentation](https://godoc.org/github.com/mahboubii/grpcmetrics?status.svg)](https://pkg.go.dev/mod/github.com/mahboubii/grpcmetrics)
 
-It is an OpenTelemetry (OTel) metric instrumentation for Golang gRPC servers and clients based on [grpc Stats](https://pkg.go.dev/google.golang.org/grpc/stats).
+It is an OpenTelemetry (OTel) metric instrumentation for Golang gRPC servers and clients based on [gRPC Stats](https://pkg.go.dev/google.golang.org/grpc/stats).
 
 ## Install
 
@@ -21,7 +21,7 @@ Metrics are reported based on [General RFC conventions](https://opentelemetry.io
 3. `rpc.client.requests_per_rpc`
 4. `rpc.client.responses_per_rpc`
 
-Keep in mind `durations`, `request.size` and `response.size` are not reported by default. If you need to enable them check out the [Options](https://pkg.go.dev/github.com/mahboubii/grpcmetrics#Option).
+Keep in mind `durations`, `request.size` and `response.size` are not reported by default. If you need to enable them check out the [options](https://pkg.go.dev/github.com/mahboubii/grpcmetrics#Option).
 
 ### Server side metrics
 
