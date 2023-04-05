@@ -1,4 +1,4 @@
-# Go OTEL gRPC Metrics
+# Go OpenTelemtry gRPC Metrics Instrumention 
 
 [![ci](https://github.com/mahboubii/grpcmetrics/actions/workflows/workflow.yaml/badge.svg?branch=main)](https://github.com/mahboubii/grpcmetrics/actions/workflows/workflow.yaml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/mahboubii/grpcmetrics)](https://goreportcard.com/report/github.com/mahboubii/grpcmetrics)
