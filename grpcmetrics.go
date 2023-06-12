@@ -10,8 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric/global"
-	"go.opentelemetry.io/otel/metric/instrument"
+	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/stats"
@@ -69,7 +68,7 @@ func getRPCStatus(err error) *status.Status {
 	return status.New(codes.Internal, err.Error())
 }
 
-func getAttributes(fullMethodName string, err error) []attribute.KeyValue {
+func getAttributes(fullMethodName string, err error) attribute.Set {
 	rpcStatus := getRPCStatus(err)
 
 	// https://opentelemetry.io/docs/reference/specification/metrics/semantic_conventions/rpc-metrics/
@@ -84,21 +83,21 @@ func getAttributes(fullMethodName string, err error) []attribute.KeyValue {
 		attr = append(attr, semconv.RPCMethodKey.String(parts[2]))
 	}
 
-	return attr
+	return attribute.NewSet(attr...)
 }
 
 // Handler implements https://pkg.go.dev/google.golang.org/grpc/stats#Handler
 type Handler struct {
 	isClient bool
 
-	rpcDuration     instrument.Float64Histogram
-	rpcRequestSize  instrument.Int64Histogram
-	rpcResponseSize instrument.Int64Histogram
+	rpcDuration     metric.Float64Histogram
+	rpcRequestSize  metric.Int64Histogram
+	rpcResponseSize metric.Int64Histogram
 
 	// RFC suggests using histogram for counts mostly for Streams
 	// It lead to high cardinality of lables so we are using counter.
-	rpcRequestsPerRPC  instrument.Int64Counter
-	rpcResponsesPerRPC instrument.Int64Counter
+	rpcRequestsPerRPC  metric.Int64Counter
+	rpcResponsesPerRPC metric.Int64Counter
 }
 
 func newHandler(isClient bool, options []Option) (*Handler, error) {
@@ -109,7 +108,7 @@ func newHandler(isClient bool, options []Option) (*Handler, error) {
 	}
 
 	if c.meterProvider == nil {
-		c.meterProvider = global.MeterProvider()
+		c.meterProvider = otel.GetMeterProvider()
 	}
 
 	if c.instrumentationName == "" {
@@ -128,30 +127,30 @@ func newHandler(isClient bool, options []Option) (*Handler, error) {
 		prefix = "rpc.client"
 	}
 
-	h.rpcRequestsPerRPC, err = meter.Int64Counter(prefix+".requests_per_rpc", instrument.WithUnit("1"))
+	h.rpcRequestsPerRPC, err = meter.Int64Counter(prefix+".requests_per_rpc", metric.WithUnit("1"))
 	if err != nil {
 		return nil, err
 	}
 
-	h.rpcResponsesPerRPC, err = meter.Int64Counter(prefix+".responses_per_rpc", instrument.WithUnit("1"))
+	h.rpcResponsesPerRPC, err = meter.Int64Counter(prefix+".responses_per_rpc", metric.WithUnit("1"))
 	if err != nil {
 		return nil, err
 	}
 
 	if c.instrumentLatency {
-		h.rpcDuration, err = meter.Float64Histogram(prefix+".duration", instrument.WithUnit("ms"))
+		h.rpcDuration, err = meter.Float64Histogram(prefix+".duration", metric.WithUnit("ms"))
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if c.instrumentSizes {
-		h.rpcRequestSize, err = meter.Int64Histogram(prefix+".request.size", instrument.WithUnit("By"))
+		h.rpcRequestSize, err = meter.Int64Histogram(prefix+".request.size", metric.WithUnit("By"))
 		if err != nil {
 			return nil, err
 		}
 
-		h.rpcResponseSize, err = meter.Int64Histogram(prefix+".response.size", instrument.WithUnit("By"))
+		h.rpcResponseSize, err = meter.Int64Histogram(prefix+".response.size", metric.WithUnit("By"))
 		if err != nil {
 			return nil, err
 		}
@@ -211,30 +210,30 @@ func (h *Handler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 
 		if h.isClient {
 			// gRPC stats handler treats client stats exactly similar to server stats while technically name should be reversed.
-			h.rpcRequestsPerRPC.Add(subCtx, atomic.LoadInt64(&ri.sentMsgs), attrs...)
-			h.rpcResponsesPerRPC.Add(subCtx, atomic.LoadInt64(&ri.recvMsgs), attrs...)
+			h.rpcRequestsPerRPC.Add(subCtx, atomic.LoadInt64(&ri.sentMsgs), metric.WithAttributeSet(attrs))
+			h.rpcResponsesPerRPC.Add(subCtx, atomic.LoadInt64(&ri.recvMsgs), metric.WithAttributeSet(attrs))
 		} else {
-			h.rpcRequestsPerRPC.Add(subCtx, atomic.LoadInt64(&ri.recvMsgs), attrs...)
-			h.rpcResponsesPerRPC.Add(subCtx, atomic.LoadInt64(&ri.sentMsgs), attrs...)
+			h.rpcRequestsPerRPC.Add(subCtx, atomic.LoadInt64(&ri.recvMsgs), metric.WithAttributeSet(attrs))
+			h.rpcResponsesPerRPC.Add(subCtx, atomic.LoadInt64(&ri.sentMsgs), metric.WithAttributeSet(attrs))
 		}
 
 		if h.rpcDuration != nil {
-			h.rpcDuration.Record(subCtx, float64(time.Since(rs.BeginTime).Milliseconds()), attrs...)
+			h.rpcDuration.Record(subCtx, float64(time.Since(rs.BeginTime).Milliseconds()), metric.WithAttributeSet(attrs))
 		}
 
 		if h.rpcRequestSize != nil {
 			if h.isClient {
-				h.rpcRequestSize.Record(subCtx, atomic.LoadInt64(&ri.sentBytes), attrs...)
+				h.rpcRequestSize.Record(subCtx, atomic.LoadInt64(&ri.sentBytes), metric.WithAttributeSet(attrs))
 			} else {
-				h.rpcRequestSize.Record(subCtx, atomic.LoadInt64(&ri.recvBytes), attrs...)
+				h.rpcRequestSize.Record(subCtx, atomic.LoadInt64(&ri.recvBytes), metric.WithAttributeSet(attrs))
 			}
 		}
 
 		if h.rpcResponseSize != nil {
 			if h.isClient {
-				h.rpcResponseSize.Record(subCtx, atomic.LoadInt64(&ri.recvBytes), attrs...)
+				h.rpcResponseSize.Record(subCtx, atomic.LoadInt64(&ri.recvBytes), metric.WithAttributeSet(attrs))
 			} else {
-				h.rpcResponseSize.Record(subCtx, atomic.LoadInt64(&ri.sentBytes), attrs...)
+				h.rpcResponseSize.Record(subCtx, atomic.LoadInt64(&ri.sentBytes), metric.WithAttributeSet(attrs))
 			}
 		}
 

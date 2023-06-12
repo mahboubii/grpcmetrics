@@ -12,7 +12,7 @@ import (
 	"github.com/mahboubii/grpcmetrics/testserver"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
@@ -42,6 +42,7 @@ func TestGetRPCStatus(t *testing.T) {
 }
 
 func TestGetAttributes(t *testing.T) {
+	listAttrs := getAttributes("/product.Products/ListTags", nil)
 	assert.ElementsMatch(t,
 		[]attribute.KeyValue{
 			semconv.RPCSystemGRPC,
@@ -50,7 +51,10 @@ func TestGetAttributes(t *testing.T) {
 			semconv.RPCServiceKey.String("product.Products"),
 			semconv.RPCMethodKey.String("ListTags"),
 		},
-		getAttributes("/product.Products/ListTags", nil))
+		listAttrs.ToSlice(),
+	)
+
+	listAttrsErr := getAttributes("/product.Products/ListTags", status.Error(codes.InvalidArgument, ""))
 
 	assert.ElementsMatch(t,
 		[]attribute.KeyValue{
@@ -60,7 +64,8 @@ func TestGetAttributes(t *testing.T) {
 			semconv.RPCServiceKey.String("product.Products"),
 			semconv.RPCMethodKey.String("ListTags"),
 		},
-		getAttributes("/product.Products/ListTags", status.Error(codes.InvalidArgument, "")))
+		listAttrsErr.ToSlice(),
+	)
 }
 
 func TestNewHandler(t *testing.T) {
@@ -76,7 +81,7 @@ func TestNewHandler(t *testing.T) {
 		WithInstrumentLatency(true),
 		WithInstrumentationName("my_name"),
 		WithInstrumentSizes(true),
-		WithMeterProvider(metric.NewNoopMeterProvider()),
+		WithMeterProvider(noop.NewMeterProvider()),
 	})
 
 	assert.NoError(t, err)
@@ -172,14 +177,14 @@ func TestUnary(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 2}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 2}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 2}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.response.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 2, Sum: 4}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.response.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2, Sum: 4}},
 	}})
 
 	clientMetrics := cMetrics().ScopeMetrics
@@ -192,14 +197,14 @@ func TestUnary(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 2}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 2}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 2}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.response.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 2, Sum: 4}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.response.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2, Sum: 4}},
 	}})
 }
 
@@ -231,14 +236,14 @@ func TestError(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 0}}, // zero out since errored
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.response.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.response.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
 
 	clientMetrics := cMetrics().ScopeMetrics
@@ -251,14 +256,14 @@ func TestError(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 0}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.response.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.response.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
 }
 
@@ -299,14 +304,14 @@ func TestStream(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 10}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.response.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1, Sum: 18}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.response.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1, Sum: 18}},
 	}})
 
 	clientMetrics := cMetrics().ScopeMetrics
@@ -319,14 +324,14 @@ func TestStream(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 10}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.response.size", Unit: "By", Data: metricdata.Histogram{
-		DataPoints: []metricdata.HistogramDataPoint{{Count: 1, Sum: 18}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.response.size", Unit: "By", Data: metricdata.Histogram[int64]{
+		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1, Sum: 18}},
 	}})
 }
 
@@ -341,8 +346,8 @@ func assertMetric(t *testing.T, inMetrics []metricdata.ScopeMetrics, attrs []att
 				assert.Equal(t, has.Unit, m.Unit)
 
 				switch d := m.Data.(type) {
-				case metricdata.Histogram:
-					inData, ok := has.Data.(metricdata.Histogram)
+				case metricdata.Histogram[int64]:
+					inData, ok := has.Data.(metricdata.Histogram[int64])
 					assert.True(t, ok, "invalid data type")
 
 					assert.Equal(t, len(inData.DataPoints), len(d.DataPoints))

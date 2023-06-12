@@ -21,8 +21,8 @@ func (e *exporter) Aggregation(k metric.InstrumentKind) aggregation.Aggregation 
 	return metric.DefaultAggregationSelector(k)
 }
 
-func (e *exporter) Export(ctx context.Context, data metricdata.ResourceMetrics) error {
-	e.data.Store(data)
+func (e *exporter) Export(ctx context.Context, data *metricdata.ResourceMetrics) error {
+	e.data.Store(*data)
 
 	return ctx.Err()
 }
