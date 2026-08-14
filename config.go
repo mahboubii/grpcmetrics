@@ -20,21 +20,21 @@ type config struct {
 	instrumentLatency   bool
 }
 
-// WithInstrumentationName returns an Option to set custom name for metrics scope.
+// WithInstrumentationName returns an Option to set a custom name for the metrics scope.
 func WithInstrumentationName(name string) Option {
 	return optionFunc(func(c *config) {
 		c.instrumentationName = name
 	})
 }
 
-// WithMeterProvider returns an Option to use custom MetricProvider when creating metrics.
+// WithMeterProvider returns an Option to use a custom MeterProvider when creating metrics.
 func WithMeterProvider(p metric.MeterProvider) Option {
 	return optionFunc(func(c *config) {
 		c.meterProvider = p
 	})
 }
 
-// WithInstrumentSizes enable instrument for rpc.{server|client}.response.size and rpc.{server|client}.request.size.
+// WithInstrumentSizes enables instruments for rpc.{server|client}.response.size and rpc.{server|client}.request.size.
 // This is a histogram which is quite costly.
 func WithInstrumentSizes(instrumentSizes bool) Option {
 	return optionFunc(func(c *config) {
@@ -42,7 +42,7 @@ func WithInstrumentSizes(instrumentSizes bool) Option {
 	})
 }
 
-// WithInstrumentLatency enable instrument for rpc.{server|client}.duration.
+// WithInstrumentLatency enables the instrument for rpc.{server|client}.duration.
 // This is a histogram which is quite costly.
 func WithInstrumentLatency(instrumentLatency bool) Option {
 	return optionFunc(func(c *config) {

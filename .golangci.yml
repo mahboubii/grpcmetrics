@@ -1,40 +1,65 @@
+version: "2"
+
 run:
   concurrency: 4
   timeout: 5m
 
 linters:
-  presets:
-    - bugs
-    - error
-    - format
-    - metalinter
-    - performance
-    - sql
-    - style
-    - test
-    - unused
-    - import
+  default: standard
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - durationcheck
+    - errname
+    - errorlint
+    - gocheckcompilerdirectives
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - predeclared
+    - reassign
+    - recvcheck
+    - revive
+    - testifylint
+    - thelper
+    - unconvert
+    - unparam
+    - usestdlibvars
   disable:
-    - goerr113
-    - interfacebloat
+    - err113
     - exhaustruct
-    - wrapcheck
-    - varnamelen
-    - gci
-    - testpackage
-    - paralleltest
-    - ireturn
     - gochecknoglobals
-    - exhaustivestruct
-    - lll
     - gochecknoinits
-    - ifshort
-    - vetshadow
-    - maligned
-    - interfacer
     - godox
-    - scopelint
-    - golint
-  issues:
-    exclude:
-      - 'declaration of "(err|ctx)" shadows declaration at'
+    - interfacebloat
+    - ireturn
+    - lll
+    - mnd
+    - paralleltest
+    - testpackage
+    - varnamelen
+    - wrapcheck
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - contextcheck
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax

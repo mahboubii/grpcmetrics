@@ -19,8 +19,8 @@ func (s *Server) Error(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Error(codes.NotFound, "error")
 }
 
-func (s Server) Stream(_ *Empty, stream TestsService_StreamServer) error {
-	for i := 0; i < 10; i++ {
+func (s *Server) Stream(_ *Empty, stream TestsService_StreamServer) error {
+	for i := range 10 {
 		if err := stream.Send(&NonEmpty{Value: int32(i)}); err != nil {
 			return err
 		}
