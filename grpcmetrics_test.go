@@ -308,7 +308,7 @@ func TestStream(t *testing.T) {
 	for {
 		_, err := res.Recv()
 		if err != nil {
-			assert.ErrorIs(t, err, io.EOF)
+			require.ErrorIs(t, err, io.EOF)
 
 			break
 		}

@@ -247,15 +247,15 @@ func (h *Handler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 			ri.sentBytes.Add(int64(rs.Length))
 		}
 	case *stats.End:
-		h.recordEnd(ri, rs)
+		h.recordEnd(ctx, ri, rs)
 	default:
 		otel.Handle(fmt.Errorf("received unhandled stats with type (%T) and data: %v", rs, rs))
 	}
 }
 
-func (h *Handler) recordEnd(ri *rpcInfo, rs *stats.End) {
-	// use a new context since original ctx could be canceled during this state.
-	subCtx := context.Background() //nolint:contextcheck // RPC ctx is often canceled at End.
+func (h *Handler) recordEnd(ctx context.Context, ri *rpcInfo, rs *stats.End) {
+	// Detach from cancel/deadline: the RPC context is often already done at End.
+	subCtx := context.WithoutCancel(ctx)
 
 	attrs := metric.WithAttributeSet(getAttributes(ri.fullMethodName, rs.Error))
 
