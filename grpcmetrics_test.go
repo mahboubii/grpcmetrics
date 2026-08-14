@@ -111,12 +111,13 @@ func TestHandleRPCWithoutInfo(t *testing.T) {
 	})
 }
 
-func newTestServer(t *testing.T, lis *bufconn.Listener) func() metricdata.ResourceMetrics {
+func newTestServer(t *testing.T, lis *bufconn.Listener, opts ...Option) func() metricdata.ResourceMetrics {
 	t.Helper()
 
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	handler, err := NewServerHandler(WithMeterProvider(mp), WithInstrumentLatency(true), WithInstrumentSizes(true))
+	opts = append([]Option{WithMeterProvider(mp)}, opts...)
+	handler, err := NewServerHandler(opts...)
 	require.NoError(t, err)
 
 	s := grpc.NewServer(grpc.StatsHandler(handler))
@@ -140,12 +141,13 @@ func newTestServer(t *testing.T, lis *bufconn.Listener) func() metricdata.Resour
 	}
 }
 
-func newTestClient(t *testing.T, lis *bufconn.Listener) (testserver.TestsServiceClient, func() metricdata.ResourceMetrics) {
+func newTestClient(t *testing.T, lis *bufconn.Listener, opts ...Option) (testserver.TestsServiceClient, func() metricdata.ResourceMetrics) {
 	t.Helper()
 
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	handler, err := NewClientHandler(WithMeterProvider(mp), WithInstrumentLatency(true), WithInstrumentSizes(true))
+	opts = append([]Option{WithMeterProvider(mp)}, opts...)
+	handler, err := NewClientHandler(opts...)
 	require.NoError(t, err)
 
 	bufDialer := func(context.Context, string) (net.Conn, error) {
@@ -176,8 +178,8 @@ func TestUnary(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 	t.Cleanup(func() { require.NoError(t, lis.Close()) })
 
-	sMetrics := newTestServer(t, lis)
-	cli, cMetrics := newTestClient(t, lis)
+	sMetrics := newTestServer(t, lis, WithInstrumentLatency(true), WithInstrumentSizes(true))
+	cli, cMetrics := newTestClient(t, lis, WithInstrumentLatency(true), WithInstrumentSizes(true))
 
 	_, err := cli.Ok(ctx, &testserver.Empty{})
 	require.NoError(t, err)
@@ -239,8 +241,8 @@ func TestError(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 	t.Cleanup(func() { require.NoError(t, lis.Close()) })
 
-	sMetrics := newTestServer(t, lis)
-	cli, cMetrics := newTestClient(t, lis)
+	sMetrics := newTestServer(t, lis, WithInstrumentLatency(true), WithInstrumentSizes(true))
+	cli, cMetrics := newTestClient(t, lis, WithInstrumentLatency(true), WithInstrumentSizes(true))
 
 	_, err := cli.Error(ctx, &testserver.Empty{})
 	require.Error(t, err)
@@ -299,8 +301,8 @@ func TestStream(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 	t.Cleanup(func() { require.NoError(t, lis.Close()) })
 
-	sMetrics := newTestServer(t, lis)
-	cli, cMetrics := newTestClient(t, lis)
+	sMetrics := newTestServer(t, lis, WithInstrumentLatency(true), WithInstrumentSizes(true))
+	cli, cMetrics := newTestClient(t, lis, WithInstrumentLatency(true), WithInstrumentSizes(true))
 
 	res, err := cli.Stream(ctx, &testserver.Empty{})
 	require.NoError(t, err)
@@ -424,4 +426,41 @@ func assertMetric(t *testing.T, inMetrics []metricdata.ScopeMetrics, attrs []att
 	}
 
 	assert.Fail(t, "could not find metric for "+has.Name)
+}
+
+func assertNoMetric(t *testing.T, inMetrics []metricdata.ScopeMetrics, name string) {
+	t.Helper()
+
+	for _, sm := range inMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				assert.Fail(t, "did not expect metric "+name)
+			}
+		}
+	}
+}
+
+func findMetric(t *testing.T, inMetrics []metricdata.ScopeMetrics, name string) metricdata.Metrics {
+	t.Helper()
+
+	for _, sm := range inMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m
+			}
+		}
+	}
+
+	t.Fatalf("could not find metric for %s", name)
+
+	return metricdata.Metrics{}
+}
+
+func collect(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+
+	return rm
 }

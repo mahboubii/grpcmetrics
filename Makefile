@@ -8,6 +8,11 @@ proto:
 test:
 	go test -race -count=1 -p 1 -v ./...
 
+.PHONY: cover
+cover:
+	go test -race -count=1 -coverprofile=coverage.out -coverpkg=./... ./...
+	go tool cover -func=coverage.out
+
 REMOTE_DEPS = go.mod go.sum
 
 GOLANGCI_VERSION = 2.12.2
