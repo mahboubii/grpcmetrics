@@ -5,22 +5,19 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"testing"
-	"time"
 
 	"github.com/mahboubii/grpcmetrics/testserver"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -33,6 +30,7 @@ func TestRPCInfoCtx(t *testing.T) {
 	riCtx := getRPCInfo(ctx)
 
 	assert.Equal(t, ri, riCtx)
+	assert.Nil(t, getRPCInfo(context.Background()))
 }
 
 func TestGetRPCStatus(t *testing.T) {
@@ -45,11 +43,11 @@ func TestGetAttributes(t *testing.T) {
 	listAttrs := getAttributes("/product.Products/ListTags", nil)
 	assert.ElementsMatch(t,
 		[]attribute.KeyValue{
-			semconv.RPCSystemGRPC,
-			semconv.RPCGRPCStatusCodeKey.Int(0),
-			attribute.Key("rpc.grpc.status").String("OK"),
-			semconv.RPCServiceKey.String("product.Products"),
-			semconv.RPCMethodKey.String("ListTags"),
+			attrRPCSystem.String(rpcSystemGRPC),
+			attrRPCGRPCStatusCode.Int(0),
+			attrRPCGRPCStatus.String("OK"),
+			attrRPCService.String("product.Products"),
+			attrRPCMethod.String("ListTags"),
 		},
 		listAttrs.ToSlice(),
 	)
@@ -58,19 +56,29 @@ func TestGetAttributes(t *testing.T) {
 
 	assert.ElementsMatch(t,
 		[]attribute.KeyValue{
-			semconv.RPCSystemGRPC,
-			semconv.RPCGRPCStatusCodeKey.Int(3),
-			attribute.Key("rpc.grpc.status").String("InvalidArgument"),
-			semconv.RPCServiceKey.String("product.Products"),
-			semconv.RPCMethodKey.String("ListTags"),
+			attrRPCSystem.String(rpcSystemGRPC),
+			attrRPCGRPCStatusCode.Int(3),
+			attrRPCGRPCStatus.String("InvalidArgument"),
+			attrRPCService.String("product.Products"),
+			attrRPCMethod.String("ListTags"),
 		},
 		listAttrsErr.ToSlice(),
+	)
+
+	malformed := getAttributes("not-a-grpc-method", nil)
+	assert.ElementsMatch(t,
+		[]attribute.KeyValue{
+			attrRPCSystem.String(rpcSystemGRPC),
+			attrRPCGRPCStatusCode.Int(0),
+			attrRPCGRPCStatus.String("OK"),
+		},
+		malformed.ToSlice(),
 	)
 }
 
 func TestNewHandler(t *testing.T) {
 	withDefaults, err := newHandler(false, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Nil(t, withDefaults.rpcDuration)
 	assert.Nil(t, withDefaults.rpcRequestSize)
 	assert.Nil(t, withDefaults.rpcResponseSize)
@@ -84,7 +92,7 @@ func TestNewHandler(t *testing.T) {
 		WithMeterProvider(noop.NewMeterProvider()),
 	})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, withConfigs.rpcDuration)
 	assert.NotNil(t, withConfigs.rpcRequestSize)
 	assert.NotNil(t, withConfigs.rpcResponseSize)
@@ -92,72 +100,90 @@ func TestNewHandler(t *testing.T) {
 	assert.NotNil(t, withConfigs.rpcResponsesPerRPC)
 }
 
+func TestHandleRPCWithoutInfo(t *testing.T) {
+	h, err := newHandler(false, nil)
+	require.NoError(t, err)
+
+	assert.NotPanics(t, func() {
+		h.HandleRPC(context.Background(), &stats.End{})
+		h.HandleRPC(context.Background(), &stats.DelayedPickComplete{})
+		h.HandleRPC(context.Background(), &stats.Begin{})
+	})
+}
+
 func newTestServer(t *testing.T, lis *bufconn.Listener) func() metricdata.ResourceMetrics {
 	t.Helper()
 
-	exp := &exporter{}
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)))
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	handler, err := NewServerHandler(WithMeterProvider(mp), WithInstrumentLatency(true), WithInstrumentSizes(true))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	s := grpc.NewServer(grpc.StatsHandler(handler))
 	testserver.RegisterTestsServiceServer(s, &testserver.Server{})
 
+	serveErr := make(chan error, 1)
 	go func() {
-		// s.Serve() cancels ctx during http2Server.finishStream() on server side
-		hs := &http.Server{
-			Handler:           h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.ServeHTTP(w, r) }), &http2.Server{}),
-			ReadHeaderTimeout: time.Minute,
-		}
-
-		assert.NoError(t, hs.Serve(lis))
+		serveErr <- s.Serve(lis)
 	}()
+	t.Cleanup(s.Stop)
 
 	return func() metricdata.ResourceMetrics {
 		s.GracefulStop()
-		mp.ForceFlush(context.Background())
+		<-serveErr
 
-		return exp.Read()
+		var rm metricdata.ResourceMetrics
+		require.NoError(t, reader.Collect(context.Background(), &rm))
+		require.NoError(t, mp.Shutdown(context.Background()))
+
+		return rm
 	}
 }
 
 func newTestClient(t *testing.T, lis *bufconn.Listener) (testserver.TestsServiceClient, func() metricdata.ResourceMetrics) {
 	t.Helper()
 
-	exp := &exporter{}
-	// xx, _ := stdoutmetric.New()
-	// mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)), sdkmetric.WithReader(sdkmetric.NewPeriodicReader(xx)))
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)))
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	handler, err := NewClientHandler(WithMeterProvider(mp), WithInstrumentLatency(true), WithInstrumentSizes(true))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	bufDialer := func(_ context.Context, address string) (net.Conn, error) {
+	bufDialer := func(context.Context, string) (net.Conn, error) {
 		return lis.Dial()
 	}
 
-	conn, err := grpc.Dial("", grpc.WithStatsHandler(handler), grpc.WithContextDialer(bufDialer), grpc.WithBlock(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	assert.NoError(t, err)
+	conn, err := grpc.NewClient(
+		"passthrough://bufnet",
+		grpc.WithStatsHandler(handler),
+		grpc.WithContextDialer(bufDialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
 
 	return testserver.NewTestsServiceClient(conn), func() metricdata.ResourceMetrics {
-		assert.NoError(t, conn.Close())
-		mp.ForceFlush(context.Background())
+		require.NoError(t, conn.Close())
 
-		return exp.Read()
+		var rm metricdata.ResourceMetrics
+		require.NoError(t, reader.Collect(context.Background(), &rm))
+		require.NoError(t, mp.Shutdown(context.Background()))
+
+		return rm
 	}
 }
 
 func TestUnary(t *testing.T) {
 	ctx := context.Background()
 	lis := bufconn.Listen(1024 * 1024)
+	t.Cleanup(func() { require.NoError(t, lis.Close()) })
 
 	sMetrics := newTestServer(t, lis)
 	cli, cMetrics := newTestClient(t, lis)
 
 	_, err := cli.Ok(ctx, &testserver.Empty{})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	_, err = cli.Ok(ctx, &testserver.Empty{})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	attrs := []attribute.KeyValue{
 		{Key: "rpc.grpc.status", Value: attribute.StringValue("OK")},
@@ -177,8 +203,8 @@ func TestUnary(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 2}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
-		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[float64]{
+		DataPoints: []metricdata.HistogramDataPoint[float64]{{Count: 2}},
 	}})
 	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
 		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
@@ -197,8 +223,8 @@ func TestUnary(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 2}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
-		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[float64]{
+		DataPoints: []metricdata.HistogramDataPoint[float64]{{Count: 2}},
 	}})
 	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
 		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 2}},
@@ -211,12 +237,13 @@ func TestUnary(t *testing.T) {
 func TestError(t *testing.T) {
 	ctx := context.Background()
 	lis := bufconn.Listen(1024 * 1024)
+	t.Cleanup(func() { require.NoError(t, lis.Close()) })
 
 	sMetrics := newTestServer(t, lis)
 	cli, cMetrics := newTestClient(t, lis)
 
 	_, err := cli.Error(ctx, &testserver.Empty{})
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	attrs := []attribute.KeyValue{
 		{Key: "rpc.grpc.status", Value: attribute.StringValue("NotFound")},
@@ -236,8 +263,8 @@ func TestError(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 0}}, // zero out since errored
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
-		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[float64]{
+		DataPoints: []metricdata.HistogramDataPoint[float64]{{Count: 1}},
 	}})
 	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
 		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
@@ -256,8 +283,8 @@ func TestError(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 0}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
-		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[float64]{
+		DataPoints: []metricdata.HistogramDataPoint[float64]{{Count: 1}},
 	}})
 	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
 		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
@@ -270,17 +297,18 @@ func TestError(t *testing.T) {
 func TestStream(t *testing.T) {
 	ctx := context.Background()
 	lis := bufconn.Listen(1024 * 1024)
+	t.Cleanup(func() { require.NoError(t, lis.Close()) })
 
 	sMetrics := newTestServer(t, lis)
 	cli, cMetrics := newTestClient(t, lis)
 
 	res, err := cli.Stream(ctx, &testserver.Empty{})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	for {
 		_, err := res.Recv()
 		if err != nil {
-			assert.ErrorIs(t, io.EOF, err)
+			assert.ErrorIs(t, err, io.EOF)
 
 			break
 		}
@@ -304,8 +332,8 @@ func TestStream(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 10}},
 	}})
-	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
-		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
+	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.duration", Unit: "ms", Data: metricdata.Histogram[float64]{
+		DataPoints: []metricdata.HistogramDataPoint[float64]{{Count: 1}},
 	}})
 	assertMetric(t, serverMetrics, attrs, metricdata.Metrics{Name: "rpc.server.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
 		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
@@ -324,8 +352,8 @@ func TestStream(t *testing.T) {
 		IsMonotonic: true,
 		DataPoints:  []metricdata.DataPoint[int64]{{Value: 10}},
 	}})
-	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[int64]{
-		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
+	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.duration", Unit: "ms", Data: metricdata.Histogram[float64]{
+		DataPoints: []metricdata.HistogramDataPoint[float64]{{Count: 1}},
 	}})
 	assertMetric(t, clientMetrics, attrs, metricdata.Metrics{Name: "rpc.client.request.size", Unit: "By", Data: metricdata.Histogram[int64]{
 		DataPoints: []metricdata.HistogramDataPoint[int64]{{Count: 1}},
@@ -342,40 +370,56 @@ func assertMetric(t *testing.T, inMetrics []metricdata.ScopeMetrics, attrs []att
 		assert.Equal(t, DefaultInstrumentationName, sm.Scope.Name)
 
 		for _, m := range sm.Metrics {
-			if m.Name == has.Name {
-				assert.Equal(t, has.Unit, m.Unit)
-
-				switch d := m.Data.(type) {
-				case metricdata.Histogram[int64]:
-					inData, ok := has.Data.(metricdata.Histogram[int64])
-					assert.True(t, ok, "invalid data type")
-
-					assert.Equal(t, len(inData.DataPoints), len(d.DataPoints))
-
-					for i := range inData.DataPoints {
-						assert.Equal(t, inData.DataPoints[i].Count, d.DataPoints[i].Count)
-
-						if m.Unit != "ms" { // ignore sum check for time duration which is flaky
-							assert.Equal(t, inData.DataPoints[i].Sum, d.DataPoints[i].Sum)
-						}
-
-						assert.ElementsMatch(t, attrs, d.DataPoints[i].Attributes.ToSlice())
-					}
-				case metricdata.Sum[int64]:
-					inData, ok := has.Data.(metricdata.Sum[int64])
-					assert.True(t, ok, "invalid data type")
-
-					assert.Equal(t, inData.IsMonotonic, d.IsMonotonic)
-					assert.Equal(t, len(inData.DataPoints), len(d.DataPoints))
-
-					for i := range inData.DataPoints {
-						assert.Equal(t, inData.DataPoints[i].Value, d.DataPoints[i].Value)
-						assert.ElementsMatch(t, attrs, d.DataPoints[i].Attributes.ToSlice())
-					}
-				}
-
-				return
+			if m.Name != has.Name {
+				continue
 			}
+
+			assert.Equal(t, has.Unit, m.Unit)
+
+			switch d := m.Data.(type) {
+			case metricdata.Histogram[int64]:
+				inData, ok := has.Data.(metricdata.Histogram[int64])
+				require.True(t, ok, "invalid data type")
+				require.Len(t, d.DataPoints, len(inData.DataPoints))
+
+				for i := range inData.DataPoints {
+					assert.Equal(t, inData.DataPoints[i].Count, d.DataPoints[i].Count)
+
+					if m.Unit != "ms" { // ignore sum check for time duration which is flaky
+						assert.Equal(t, inData.DataPoints[i].Sum, d.DataPoints[i].Sum)
+					}
+
+					assert.ElementsMatch(t, attrs, d.DataPoints[i].Attributes.ToSlice())
+				}
+			case metricdata.Histogram[float64]:
+				inData, ok := has.Data.(metricdata.Histogram[float64])
+				require.True(t, ok, "invalid data type")
+				require.Len(t, d.DataPoints, len(inData.DataPoints))
+
+				for i := range inData.DataPoints {
+					assert.Equal(t, inData.DataPoints[i].Count, d.DataPoints[i].Count)
+
+					if m.Unit != "ms" {
+						assert.InDelta(t, inData.DataPoints[i].Sum, d.DataPoints[i].Sum, 0.01)
+					}
+
+					assert.ElementsMatch(t, attrs, d.DataPoints[i].Attributes.ToSlice())
+				}
+			case metricdata.Sum[int64]:
+				inData, ok := has.Data.(metricdata.Sum[int64])
+				require.True(t, ok, "invalid data type")
+				assert.Equal(t, inData.IsMonotonic, d.IsMonotonic)
+				require.Len(t, d.DataPoints, len(inData.DataPoints))
+
+				for i := range inData.DataPoints {
+					assert.Equal(t, inData.DataPoints[i].Value, d.DataPoints[i].Value)
+					assert.ElementsMatch(t, attrs, d.DataPoints[i].Attributes.ToSlice())
+				}
+			default:
+				assert.Failf(t, "unexpected metric data type", "%T", m.Data)
+			}
+
+			return
 		}
 	}
 

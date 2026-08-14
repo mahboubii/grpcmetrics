@@ -2,15 +2,15 @@
 proto:
 	protoc  testserver/testserver.proto  \
 		--go_out=. --go_opt=paths=source_relative \
-		--go-grpc_out=. --go-grpc_opt=paths=source_relative 
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative
 
 .PHONY: test
 test:
-	go test -race -p 1 -v ./...
+	go test -race -count=1 -p 1 -v ./...
 
 REMOTE_DEPS = go.mod go.sum
 
-GOLANGCI_VERSION = 1.52.2
+GOLANGCI_VERSION = 2.12.2
 GOLANGCI = .bin/golangci/$(GOLANGCI_VERSION)/golangci-lint
 
 $(REMOTE_DEPS):
@@ -27,3 +27,7 @@ lint: $(REMOTE_DEPS) $(GOLANGCI)
 .PHONY: lint-fix
 lint-fix: $(REMOTE_DEPS) $(GOLANGCI)
 	$(GOLANGCI) run --fix ./...
+
+.PHONY: tidy
+tidy:
+	go mod tidy
